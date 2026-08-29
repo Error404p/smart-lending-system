@@ -1,0 +1,10 @@
+{
+  "name": "smart-lending-system",
+  "version": "1.0.0",
+  "description": "Asset Lending System",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm install --prefix backend",
+    "backend": "npm run dev --prefix backend"
+  }
+}

@@ -13,7 +13,7 @@ const ItemSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['available', 'borrowed'],
+    enum: ['available', 'borrowed', 'lost'],
     default: 'available',
     required: true
   },

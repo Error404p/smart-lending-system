@@ -22,15 +22,31 @@ const LoanSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'returned', 'overdue'],
-    default: 'active',
+    enum: ['Requested', 'Issued', 'Returned', 'Lost'],
+    default: 'Requested',
     required: true
   },
   returnedDate: {
     type: Date
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
+
+// Virtual for dynamic overdue status calculation
+LoanSchema.virtual('isOverdue').get(function() {
+  return this.status === 'Issued' && this.dueDate < new Date();
+});
+
+// Partial unique index to enforce that an item can only have ONE open loan (Requested or Issued) at a time
+LoanSchema.index(
+  { item: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['Requested', 'Issued'] } }
+  }
+);
 
 module.exports = mongoose.model('Loan', LoanSchema);

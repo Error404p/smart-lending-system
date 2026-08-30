@@ -1,0 +1,285 @@
+const express = require('express');
+const router = express.Router();
+const Loan = require('../models/Loan');
+const Item = require('../models/Item');
+const User = require('../models/User');
+const LoanHistory = require('../models/LoanHistory');
+const { protect, authorize } = require('../middleware/auth');
+
+// @route   POST /api/loans
+// @desc    Create a new loan (member request or librarian direct-issue)
+// @access  Private (Authenticated users)
+router.post('/', protect, async (req, res) => {
+  try {
+    const { itemId, borrowerId, dueDate, status } = req.body;
+
+    // Validate input
+    if (!itemId || !dueDate) {
+      return res.status(400).json({ message: 'Item ID and due date are required' });
+    }
+
+    // Determine target borrower
+    let targetBorrowerId = req.user.id;
+    if (req.user.role === 'librarian' && borrowerId) {
+      targetBorrowerId = borrowerId;
+    }
+
+    // Determine target status
+    let targetStatus = 'Requested';
+    if (req.user.role === 'librarian' && status) {
+      if (!['Requested', 'Issued'].includes(status)) {
+        return res.status(400).json({ message: "Initial status must be either 'Requested' or 'Issued'" });
+      }
+      targetStatus = status;
+    }
+
+    // Verify item exists
+    const item = await Item.findById(itemId);
+    if (!item) {
+      return res.status(404).json({ message: 'Item not found' });
+    }
+
+    // Verify borrower exists
+    const borrower = await User.findById(targetBorrowerId);
+    if (!borrower) {
+      return res.status(404).json({ message: 'Borrower not found' });
+    }
+
+    // Server-side guard: Reject if the item already has an open loan (Requested or Issued)
+    const existingOpenLoan = await Loan.findOne({
+      item: itemId,
+      status: { $in: ['Requested', 'Issued'] }
+    });
+    if (existingOpenLoan) {
+      return res.status(400).json({
+        message: `Refused: Item already has an open loan. Existing loan status is '${existingOpenLoan.status}'.`
+      });
+    }
+
+    // Create loan object
+    const newLoan = new Loan({
+      item: itemId,
+      borrower: targetBorrowerId,
+      dueDate: new Date(dueDate),
+      status: targetStatus
+    });
+
+    if (targetStatus === 'Issued') {
+      newLoan.borrowDate = new Date();
+    }
+
+    // Save loan, catching duplicate key errors from the partial unique index (concurrency guard)
+    try {
+      await newLoan.save();
+    } catch (err) {
+      if (err.code === 11000) {
+        return res.status(400).json({
+          message: 'Concurrency Guard: A concurrent request or issue was detected. The item already has an open loan.'
+        });
+      }
+      throw err;
+    }
+
+    // If direct-issued, update item state
+    if (targetStatus === 'Issued') {
+      await Item.findByIdAndUpdate(itemId, {
+        status: 'borrowed',
+        borrowedBy: targetBorrowerId
+      });
+    }
+
+    res.status(201).json(newLoan);
+  } catch (err) {
+    console.error('Create loan error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   PATCH /api/loans/:id/issue
+// @desc    Issue a requested loan
+// @access  Private (Librarian only)
+router.patch('/:id/issue', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    // Strict transition check: Requested -> Issued
+    if (loan.status !== 'Requested') {
+      return res.status(400).json({
+        message: `Invalid transition: Cannot issue a loan in '${loan.status}' status. It must be in 'Requested' status.`
+      });
+    }
+
+    // Double-check if there is another open loan for this item (concurrency safety)
+    const otherOpenLoan = await Loan.findOne({
+      item: loan.item,
+      status: { $in: ['Requested', 'Issued'] },
+      _id: { $ne: loan._id }
+    });
+    if (otherOpenLoan) {
+      return res.status(400).json({
+        message: `Refused: Item already has an active loan. Existing loan status is '${otherOpenLoan.status}'.`
+      });
+    }
+
+    // Update loan details
+    loan.status = 'Issued';
+    loan.borrowDate = new Date();
+    if (req.body.dueDate) {
+      loan.dueDate = new Date(req.body.dueDate);
+    }
+
+    try {
+      await loan.save();
+    } catch (err) {
+      if (err.code === 11000) {
+        return res.status(400).json({
+          message: 'Concurrency Guard: A concurrent issue operation was detected. The item already has an open loan.'
+        });
+      }
+      throw err;
+    }
+
+    // Update item catalogue state
+    await Item.findByIdAndUpdate(loan.item, {
+      status: 'borrowed',
+      borrowedBy: loan.borrower
+    });
+
+    res.json(loan);
+  } catch (err) {
+    console.error('Issue loan error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   PATCH /api/loans/:id/return
+// @desc    Return an issued item
+// @access  Private (Librarian only)
+router.patch('/:id/return', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    // Strict transition check: Issued -> Returned
+    if (loan.status !== 'Issued') {
+      return res.status(400).json({
+        message: `Invalid transition: Cannot return a loan in '${loan.status}' status. It must be in 'Issued' status.`
+      });
+    }
+
+    // Update loan state
+    loan.status = 'Returned';
+    loan.returnedDate = new Date();
+    await loan.save();
+
+    // Reset item status to available
+    await Item.findByIdAndUpdate(loan.item, {
+      status: 'available',
+      borrowedBy: null
+    });
+
+    // Write to audit LoanHistory
+    const isOverdueAtReturn = loan.dueDate < loan.returnedDate;
+    const history = new LoanHistory({
+      item: loan.item,
+      borrower: loan.borrower,
+      borrowDate: loan.borrowDate,
+      dueDate: loan.dueDate,
+      returnDate: loan.returnedDate,
+      statusAtReturn: isOverdueAtReturn ? 'returned-overdue' : 'returned'
+    });
+    await history.save();
+
+    res.json({ loan, history });
+  } catch (err) {
+    console.error('Return loan error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   PATCH /api/loans/:id/lost
+// @desc    Mark an issued item as lost
+// @access  Private (Librarian only)
+router.patch('/:id/lost', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    // Strict transition check: Issued -> Lost
+    if (loan.status !== 'Issued') {
+      return res.status(400).json({
+        message: `Invalid transition: Cannot mark a loan in '${loan.status}' status as lost. It must be in 'Issued' status.`
+      });
+    }
+
+    // Update loan state
+    loan.status = 'Lost';
+    await loan.save();
+
+    // Mark item as lost in catalog
+    await Item.findByIdAndUpdate(loan.item, {
+      status: 'lost',
+      borrowedBy: null
+    });
+
+    res.json(loan);
+  } catch (err) {
+    console.error('Mark lost error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/loans
+// @desc    Get all loans (Librarians view all, Members view their own)
+// @access  Private
+router.get('/', protect, async (req, res) => {
+  try {
+    let query = {};
+    if (req.user.role !== 'librarian') {
+      query.borrower = req.user.id;
+    }
+
+    const loans = await Loan.find(query)
+      .populate('item')
+      .populate('borrower', 'username role');
+
+    res.json(loans);
+  } catch (err) {
+    console.error('Get loans error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/loans/:id
+// @desc    Get a single loan details
+// @access  Private
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id)
+      .populate('item')
+      .populate('borrower', 'username role');
+
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    // Members can only view their own loan
+    if (req.user.role !== 'librarian' && loan.borrower._id.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to view this loan' });
+    }
+
+    res.json(loan);
+  } catch (err) {
+    console.error('Get loan by id error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;

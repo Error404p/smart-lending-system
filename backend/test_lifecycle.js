@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const express = require('express');
 const cors = require('cors');
+const { MongoMemoryServer } = require('mongodb-memory-server');
 const User = require('./models/User');
 const Item = require('./models/Item');
 const Loan = require('./models/Loan');
@@ -10,14 +11,20 @@ const LoanHistory = require('./models/LoanHistory');
 require('dotenv').config();
 
 const PORT = 5005;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/smart-lending-test';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+
+let mongoServer;
 
 async function runTests() {
   console.log('--- STARTING LIFECYCLE TESTS ---');
 
+  // Start MongoDB Memory Server
+  mongoServer = await MongoMemoryServer.create();
+  const uri = mongoServer.getUri();
+  console.log(`MongoDB Memory Server started at ${uri}`);
+
   // 1. Connect to DB and Clear Data
-  await mongoose.connect(MONGO_URI);
+  await mongoose.connect(uri);
   console.log('Connected to MongoDB.');
   
   await User.deleteMany({});
@@ -202,8 +209,12 @@ async function runTests() {
     console.error(error);
     process.exitCode = 1;
   } finally {
-    server.close();
+    if (server) server.close();
     await mongoose.connection.close();
+    if (mongoServer) {
+      await mongoServer.stop();
+      console.log('MongoDB Memory Server stopped.');
+    }
     console.log('Server and DB connection closed.');
     process.exit(process.exitCode || 0);
   }

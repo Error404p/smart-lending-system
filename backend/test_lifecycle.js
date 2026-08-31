@@ -83,13 +83,22 @@ async function runTests() {
 
     // --- TEST FLOW ---
 
-    // 1. Register users
+    // 1. Register users (seed librarian directly, register member publicly)
     console.log('\n[1] Registering Librarian & Member...');
-    const libReg = await post('/api/auth/register', { username: 'librarian_test', password: 'password123', role: 'librarian' });
-    if (libReg.status !== 201) throw new Error('Librarian registration failed');
-    const libToken = libReg.data.token;
+    const bcrypt = require('bcryptjs');
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash('password123', salt);
+    await User.create({
+      username: 'librarian_test',
+      password: hashedPassword,
+      role: 'librarian'
+    });
 
-    const memReg = await post('/api/auth/register', { username: 'member_test', password: 'password123', role: 'member' });
+    const libLogin = await post('/api/auth/login', { username: 'librarian_test', password: 'password123' });
+    if (libLogin.status !== 200) throw new Error('Librarian login failed');
+    const libToken = libLogin.data.token;
+
+    const memReg = await post('/api/auth/register', { username: 'member_test', password: 'password123' });
     if (memReg.status !== 201) throw new Error('Member registration failed');
     const memToken = memReg.data.token;
     const memberId = memReg.data.user.id;
@@ -158,12 +167,15 @@ async function runTests() {
     }
     console.log('Item catalog reset to available.');
 
-    // Verify LoanHistory entry exists
-    const histories = await LoanHistory.find({ item: itemId });
-    if (histories.length !== 1 || histories[0].statusAtReturn !== 'returned') {
-      throw new Error(`Loan history entry incorrect: ${JSON.stringify(histories)}`);
+    // Verify LoanHistory timeline entries exist
+    const histories = await LoanHistory.find({ item: itemId }).sort({ createdAt: 1 });
+    if (histories.length !== 3) {
+      throw new Error(`Loan history entries count incorrect: expected 3, got ${histories.length}`);
     }
-    console.log('LoanHistory audit entry created successfully.');
+    if (histories[0].state !== 'Requested' || histories[1].state !== 'Issued' || histories[2].state !== 'Returned') {
+      throw new Error(`Loan history states incorrect: ${JSON.stringify(histories)}`);
+    }
+    console.log('LoanHistory timeline audit entries created successfully.');
 
     // 9. Edge Case: Returning already-returned loan
     console.log('\n[9] Attempting to return already-returned loan...');

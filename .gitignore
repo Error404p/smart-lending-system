@@ -28,3 +28,6 @@ Thumbs.db
 
 # IDE metadata
 .gemini/
+
+# Database data
+backend/db-data/

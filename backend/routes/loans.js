@@ -289,6 +289,50 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/loans/overdue
+// @desc    Get all active overdue loans (librarian only)
+// @access  Private (Librarian only)
+router.get('/overdue', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const overdueLoans = await Loan.find({
+      status: 'Issued',
+      dueDate: { $lt: new Date() },
+      alertDismissed: { $ne: true }
+    })
+    .populate('item')
+    .populate('borrower', 'username role');
+
+    res.json(overdueLoans);
+  } catch (err) {
+    console.error('Get overdue loans error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   PATCH /api/loans/:id/dismiss-alert
+// @desc    Dismiss overdue alert for a specific loan (librarian only)
+// @access  Private (Librarian only)
+router.patch('/:id/dismiss-alert', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    if (loan.status !== 'Issued') {
+      return res.status(400).json({ message: 'Only active issued loans can have overdue alerts dismissed' });
+    }
+
+    loan.alertDismissed = true;
+    await loan.save();
+
+    res.json({ message: 'Alert dismissed successfully', loan });
+  } catch (err) {
+    console.error('Dismiss alert error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET /api/loans/:id
 // @desc    Get a single loan details
 // @access  Private

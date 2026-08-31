@@ -28,6 +28,11 @@ const LoanSchema = new mongoose.Schema({
   },
   returnedDate: {
     type: Date
+  },
+  alertDismissed: {
+    type: Boolean,
+    default: false,
+    required: true
   }
 }, {
   timestamps: true,

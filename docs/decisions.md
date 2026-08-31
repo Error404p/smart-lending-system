@@ -27,4 +27,21 @@ To prevent race conditions where two checkouts or open request items slip throug
 ## 6. In-Memory Testing Setup
 To support self-contained, offline testing, we integrated `mongodb-memory-server` into our automated testing pipeline (`test_lifecycle.js`). This automatically spins up a clean, ephemeral MongoDB instance, executes our test suites, and tears down the database, ensuring zero side-effects on development databases.
 
+# Architecture & Tech Decisions - Day 3
+
+These are the key architectural choices made during Day 3 implementation:
+
+## 7. Persistent In-Memory Database for Development
+Since no native MongoDB service was installed on the host system, we created `start-db.js` using `mongodb-memory-server` configured to bind to port 27017 and write data physically to `backend/db-data`. This allows a seamless developer checkout experience with fully working database state that behaves identically to a native local MongoDB server.
+
+## 8. Absolute Member-Only Signup Enforcement
+We modified `/register` to ignore incoming client-supplied roles and force `role: 'member'`. Librarians are strictly created through direct database seeding/commands. This blocks public escalation attempts.
+
+## 9. Scoping Overdue Alerts to Loan Instances
+To satisfy the rule that dismissing an alert should not affect future borrowings of the same item, we introduced `alertDismissed` to the `Loan` schema. This confines the dismissal to the specific loan instance, so if the item is returned and checked out again later on a new loan, a new overdue alert will trigger and surface correctly if it becomes past due.
+
+## 10. Normalizing Timeline Events
+We redefined the `LoanHistory` schema to represent a single timeline change event (state transition) rather than a complete loan summary. This lets us capture and preserve comments and transition authors for any transition (Requested, Issued, Returned, Lost) in an append-only collection.
+
+
 

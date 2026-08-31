@@ -63,7 +63,8 @@ async function seedDB() {
       name: 'MacBook Pro 16"',
       category: 'Laptops',
       status: 'borrowed',
-      borrowedBy: member1._id
+      borrowedBy: member1._id,
+      custodians: [librarian._id]
     });
 
     const itemBook = await Item.create({

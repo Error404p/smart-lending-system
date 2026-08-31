@@ -11,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-key-12345';
 // @access  Public
 router.post('/register', async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password } = req.body;
 
     // Simple validation
     if (!username || !password) {
@@ -32,7 +32,7 @@ router.post('/register', async (req, res) => {
     const newUser = new User({
       username,
       password: hashedPassword,
-      role: role || 'member'
+      role: 'member'
     });
 
     await newUser.save();

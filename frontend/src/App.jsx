@@ -16,6 +16,19 @@ export default function App() {
   const [loans, setLoans] = useState([]);
   const [overdueAlerts, setOverdueAlerts] = useState([]);
   const [librarians, setLibrarians] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  
+  // Day 4: Server-Side Loan Query, Filter, Sort & Pagination states
+  const [loanSearch, setLoanSearch] = useState('');
+  const [loanStatus, setLoanStatus] = useState('all');
+  const [loanItem, setLoanItem] = useState('all');
+  const [loanBorrower, setLoanBorrower] = useState('all');
+  const [loanSortBy, setLoanSortBy] = useState('createdAt');
+  const [loanSortOrder, setLoanSortOrder] = useState('desc');
+  const [loanPage, setLoanPage] = useState(1);
+  const [loanLimit, setLoanLimit] = useState(5);
+  const [loanTotalCount, setLoanTotalCount] = useState(0);
+  const [loanTotalPages, setLoanTotalPages] = useState(1);
   
   // UI filter for librarian catalogue
   const [onlyMyCustodian, setOnlyMyCustodian] = useState(false);
@@ -62,13 +75,34 @@ export default function App() {
   useEffect(() => {
     if (user && token) {
       fetchItems();
-      fetchLoans();
       if (user.role === 'librarian') {
         fetchOverdueAlerts();
         fetchLibrarians();
+        fetchAllUsers();
       }
     }
   }, [user, token, onlyMyCustodian]);
+
+  // Fetch loans whenever server-side query params change
+  useEffect(() => {
+    if (user && token) {
+      fetchLoans();
+    }
+  }, [user, token, loanSearch, loanStatus, loanItem, loanBorrower, loanSortBy, loanSortOrder, loanPage, loanLimit]);
+
+  const fetchAllUsers = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllUsers(data);
+      }
+    } catch (err) {
+      console.error('Fetch users error:', err);
+    }
+  };
 
   // Alert count badge updates periodically or on changes
   const fetchOverdueAlerts = async () => {
@@ -144,6 +178,18 @@ export default function App() {
     setLoans([]);
     setOverdueAlerts([]);
     setLibrarians([]);
+    setAllUsers([]);
+    handleClearLoanFilters();
+  };
+
+  const handleClearLoanFilters = () => {
+    setLoanSearch('');
+    setLoanStatus('all');
+    setLoanItem('all');
+    setLoanBorrower('all');
+    setLoanSortBy('createdAt');
+    setLoanSortOrder('desc');
+    setLoanPage(1);
   };
 
   // Catalogue Actions
@@ -186,12 +232,24 @@ export default function App() {
   // Loan Actions
   const fetchLoans = async () => {
     try {
-      const res = await fetch(`${API_BASE}/loans`, {
+      const queryParams = new URLSearchParams();
+      if (loanSearch && loanSearch.trim()) queryParams.set('search', loanSearch.trim());
+      if (loanStatus && loanStatus !== 'all') queryParams.set('status', loanStatus);
+      if (loanItem && loanItem !== 'all') queryParams.set('item', loanItem);
+      if (user?.role === 'librarian' && loanBorrower && loanBorrower !== 'all') queryParams.set('borrower', loanBorrower);
+      if (loanSortBy) queryParams.set('sortBy', loanSortBy);
+      if (loanSortOrder) queryParams.set('sortOrder', loanSortOrder);
+      queryParams.set('page', loanPage);
+      queryParams.set('limit', loanLimit);
+
+      const res = await fetch(`${API_BASE}/loans?${queryParams.toString()}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (!res.ok) throw new Error('Failed to fetch loans');
       const data = await res.json();
-      setLoans(data);
+      setLoans(data.loans || []);
+      setLoanTotalCount(data.totalCount || 0);
+      setLoanTotalPages(data.totalPages || 1);
     } catch (err) {
       showFeedback(err.message, 'error');
     }
@@ -639,10 +697,149 @@ export default function App() {
                 <h2 style={{ marginBottom: '1.5rem' }}>
                   {user.role === 'librarian' ? 'System Checkout History & Requests' : 'My Requests & Loans'}
                 </h2>
+
+                {/* Server-Side Query Controls */}
+                <div className="query-container">
+                  {/* Search Row */}
+                  <div className="query-search-row">
+                    <input 
+                      type="text"
+                      className="form-control query-search-input"
+                      placeholder={user.role === 'librarian' ? "Search item title or borrower username..." : "Search item title..."}
+                      value={loanSearch}
+                      onChange={(e) => { setLoanSearch(e.target.value); setLoanPage(1); }}
+                    />
+                    {loanSearch && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => { setLoanSearch(''); setLoanPage(1); }}>
+                        Clear Search
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filters Grid */}
+                  <div className="query-filters-grid">
+                    {/* Status Filter */}
+                    <div>
+                      <label className="filter-label">Status</label>
+                      <select 
+                        className="query-select"
+                        value={loanStatus}
+                        onChange={(e) => { setLoanStatus(e.target.value); setLoanPage(1); }}
+                      >
+                        <option value="all">All Statuses</option>
+                        <option value="Requested">Requested</option>
+                        <option value="Issued">Issued</option>
+                        <option value="Returned">Returned</option>
+                        <option value="Lost">Lost</option>
+                      </select>
+                    </div>
+
+                    {/* Item Filter */}
+                    <div>
+                      <label className="filter-label">Filter by Asset</label>
+                      <select 
+                        className="query-select"
+                        value={loanItem}
+                        onChange={(e) => { setLoanItem(e.target.value); setLoanPage(1); }}
+                      >
+                        <option value="all">All Assets</option>
+                        {items.map(i => (
+                          <option key={i._id} value={i._id}>{i.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Borrower Filter (Librarians Only) */}
+                    {user.role === 'librarian' && (
+                      <div>
+                        <label className="filter-label">Filter by Borrower</label>
+                        <select 
+                          className="query-select"
+                          value={loanBorrower}
+                          onChange={(e) => { setLoanBorrower(e.target.value); setLoanPage(1); }}
+                        >
+                          <option value="all">All Borrowers</option>
+                          {allUsers.map(u => (
+                            <option key={u._id} value={u._id}>{u.username} ({u.role})</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Sort By Field */}
+                    <div>
+                      <label className="filter-label">Sort By</label>
+                      <select 
+                        className="query-select"
+                        value={loanSortBy}
+                        onChange={(e) => { setLoanSortBy(e.target.value); setLoanPage(1); }}
+                      >
+                        <option value="createdAt">Request / Created Date</option>
+                        <option value="dueDate">Due Date</option>
+                        <option value="borrowDate">Borrow Date</option>
+                        <option value="status">Status</option>
+                      </select>
+                    </div>
+
+                    {/* Items Per Page */}
+                    <div>
+                      <label className="filter-label">Page Size</label>
+                      <select 
+                        className="query-select"
+                        value={loanLimit}
+                        onChange={(e) => { setLoanLimit(Number(e.target.value)); setLoanPage(1); }}
+                      >
+                        <option value={5}>5 per page</option>
+                        <option value={10}>10 per page</option>
+                        <option value={20}>20 per page</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Actions & Sort Direction Row */}
+                  <div className="query-actions-row">
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <button 
+                        type="button"
+                        className="sort-direction-btn"
+                        onClick={() => { setLoanSortOrder(prev => prev === 'asc' ? 'desc' : 'asc'); setLoanPage(1); }}
+                      >
+                        {loanSortOrder === 'asc' ? '↑ Ascending' : '↓ Descending'}
+                      </button>
+                      <button 
+                        type="button" 
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleClearLoanFilters}
+                      >
+                        Reset All Filters
+                      </button>
+                    </div>
+
+                    <div className="pagination-info">
+                      Matching Loans: <strong>{loanTotalCount}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results Summary */}
+                <div className="loan-results-summary">
+                  <span>
+                    Showing {loans.length} of {loanTotalCount} matching records (Page {loanPage} of {loanTotalPages})
+                  </span>
+                </div>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {loans.length === 0 ? (
-                    <p style={{ color: 'var(--text-secondary)' }}>No request or checkout records found.</p>
+                    <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+                      <p style={{ color: 'var(--text-secondary)' }}>No request or checkout records matching current query.</p>
+                      <button 
+                        className="btn btn-secondary btn-sm" 
+                        style={{ marginTop: '0.75rem' }} 
+                        onClick={handleClearLoanFilters}
+                      >
+                        Reset Filters
+                      </button>
+                    </div>
                   ) : (
                     loans.map(loan => (
                       <div className="card" key={loan._id}>
@@ -666,6 +863,10 @@ export default function App() {
                         </div>
 
                         <div className="card-body" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginTop: '0.5rem' }}>
+                          <div>
+                            <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Request/Create Date</span>
+                            <span style={{ fontSize: '0.95rem' }}>{formatDate(loan.createdAt || loan.borrowDate)}</span>
+                          </div>
                           <div>
                             <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Borrow Date</span>
                             <span style={{ fontSize: '0.95rem' }}>{formatDate(loan.borrowDate)}</span>
@@ -731,6 +932,48 @@ export default function App() {
                     ))
                   )}
                 </div>
+
+                {/* Server-Side Pagination Bar */}
+                {loanTotalCount > 0 && (
+                  <div className="pagination-container">
+                    <div className="pagination-info">
+                      Page <strong>{loanPage}</strong> of <strong>{loanTotalPages}</strong> ({loanTotalCount} total items)
+                    </div>
+                    <div className="pagination-controls">
+                      <button 
+                        className="pagination-btn"
+                        disabled={loanPage <= 1}
+                        onClick={() => setLoanPage(1)}
+                      >
+                        « First
+                      </button>
+                      <button 
+                        className="pagination-btn"
+                        disabled={loanPage <= 1}
+                        onClick={() => setLoanPage(prev => Math.max(1, prev - 1))}
+                      >
+                        ‹ Prev
+                      </button>
+                      <span className="pagination-page-indicator">
+                        {loanPage} / {loanTotalPages}
+                      </span>
+                      <button 
+                        className="pagination-btn"
+                        disabled={loanPage >= loanTotalPages}
+                        onClick={() => setLoanPage(prev => Math.min(loanTotalPages, prev + 1))}
+                      >
+                        Next ›
+                      </button>
+                      <button 
+                        className="pagination-btn"
+                        disabled={loanPage >= loanTotalPages}
+                        onClick={() => setLoanPage(loanTotalPages)}
+                      >
+                        Last »
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

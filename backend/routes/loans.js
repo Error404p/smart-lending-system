@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const express = require('express');
 const router = express.Router();
 const Loan = require('../models/Loan');
@@ -269,16 +270,68 @@ router.patch('/:id/lost', protect, authorize('librarian'), async (req, res) => {
 });
 
 // @route   GET /api/loans
-// @desc    Get all loans (Librarians view all, Members view their own)
-// @access  Private
+// @desc    Get loans with server-side text search, filters, and sorting
+// @access  Private (Librarians view all, Members scoped to their own loans)
 router.get('/', protect, async (req, res) => {
   try {
-    let query = {};
+    const { search, status, item, borrower, sortBy, sortOrder } = req.query;
+
+    const queryConditions = [];
+
+    // Role Enforcement: Members MUST only ever see their own loans
     if (req.user.role !== 'librarian') {
-      query.borrower = req.user.id;
+      queryConditions.push({ borrower: req.user.id });
+    } else if (borrower && mongoose.isValidObjectId(borrower)) {
+      queryConditions.push({ borrower });
     }
 
-    const loans = await Loan.find(query)
+    // Status filter
+    if (status && ['Requested', 'Issued', 'Returned', 'Lost'].includes(status)) {
+      queryConditions.push({ status });
+    }
+
+    // Item filter
+    if (item && mongoose.isValidObjectId(item)) {
+      queryConditions.push({ item });
+    }
+
+    // Text search over item title (name) and borrower (username)
+    if (search && search.trim()) {
+      const sanitized = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(sanitized, 'i');
+
+      const [matchingItems, matchingUsers] = await Promise.all([
+        Item.find({ name: searchRegex }).select('_id'),
+        User.find({ username: searchRegex }).select('_id')
+      ]);
+
+      const itemIds = matchingItems.map(i => i._id);
+      const userIds = matchingUsers.map(u => u._id);
+
+      queryConditions.push({
+        $or: [
+          { item: { $in: itemIds } },
+          { borrower: { $in: userIds } }
+        ]
+      });
+    }
+
+    const finalQuery = queryConditions.length > 0 ? { $and: queryConditions } : {};
+
+    // Sorting
+    const sortFieldMap = {
+      dueDate: 'dueDate',
+      createdAt: 'createdAt',
+      requestedDate: 'createdAt',
+      borrowDate: 'borrowDate',
+      status: 'status'
+    };
+    const sortField = sortFieldMap[sortBy] || 'createdAt';
+    const direction = (sortOrder === 'asc' || sortOrder === '1') ? 1 : -1;
+    const sortOptions = { [sortField]: direction };
+
+    const loans = await Loan.find(finalQuery)
+      .sort(sortOptions)
       .populate('item')
       .populate('borrower', 'username role');
 

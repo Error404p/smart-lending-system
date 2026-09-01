@@ -87,6 +87,28 @@ async function seedDB() {
       status: 'available',
       borrowedBy: null
     });
+
+    const itemCamera = await Item.create({
+      name: 'Sony Alpha A7 IV',
+      category: 'Cameras',
+      status: 'borrowed',
+      borrowedBy: member3._id,
+      custodians: [librarian._id]
+    });
+
+    const itemMicrophone = await Item.create({
+      name: 'Shure SM7B Dynamic Mic',
+      category: 'Audio',
+      status: 'borrowed',
+      borrowedBy: member1._id
+    });
+
+    const itemMonitor = await Item.create({
+      name: 'Dell UltraSharp 27" 4K',
+      category: 'Monitors',
+      status: 'available',
+      borrowedBy: null
+    });
     console.log('Items created successfully.');
 
     // Create loans
@@ -129,14 +151,32 @@ async function seedDB() {
       returnedDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000)
     });
 
-    // Since this is returned, also write a dummy audit entry in LoanHistory for now
-    await LoanHistory.create({
-      item: itemProjector._id,
+    // 5. Issued loan (member3 checkout 'Sony Alpha A7 IV')
+    const loanIssued2 = await Loan.create({
+      item: itemCamera._id,
       borrower: member3._id,
-      borrowDate: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
-      dueDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
-      returnDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
-      statusAtReturn: 'returned'
+      borrowDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
+      dueDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000), // 12 days from now
+      status: 'Issued'
+    });
+
+    // 6. Issued loan (member1 checkout 'Shure SM7B')
+    const loanIssued3 = await Loan.create({
+      item: itemMicrophone._id,
+      borrower: member1._id,
+      borrowDate: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
+      dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
+      status: 'Issued'
+    });
+
+    // 7. Historical Returned loan (member1 previously returned 'Dell UltraSharp')
+    const loanReturned2 = await Loan.create({
+      item: itemMonitor._id,
+      borrower: member1._id,
+      borrowDate: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
+      dueDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      status: 'Returned',
+      returnedDate: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000)
     });
 
     console.log('Loans created successfully.');

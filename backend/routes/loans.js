@@ -330,12 +330,30 @@ router.get('/', protect, async (req, res) => {
     const direction = (sortOrder === 'asc' || sortOrder === '1') ? 1 : -1;
     const sortOptions = { [sortField]: direction };
 
-    const loans = await Loan.find(finalQuery)
-      .sort(sortOptions)
-      .populate('item')
-      .populate('borrower', 'username role');
+    // Pagination
+    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
 
-    res.json(loans);
+    const [totalCount, loans] = await Promise.all([
+      Loan.countDocuments(finalQuery),
+      Loan.find(finalQuery)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limitNum)
+        .populate('item')
+        .populate('borrower', 'username role')
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum) || 1;
+
+    res.json({
+      loans,
+      totalCount,
+      totalPages,
+      page: pageNum,
+      limit: limitNum
+    });
   } catch (err) {
     console.error('Get loans error:', err);
     res.status(500).json({ message: 'Server error' });

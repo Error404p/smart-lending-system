@@ -117,4 +117,17 @@ router.get('/librarians', protect, authorize('librarian'), async (req, res) => {
   }
 });
 
+// @route   GET /api/auth/users
+// @desc    Get all users for filtering/lookups (librarian only)
+// @access  Private (Librarian only)
+router.get('/users', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const users = await User.find().select('username role');
+    res.json(users);
+  } catch (err) {
+    console.error('Get users error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;

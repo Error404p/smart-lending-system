@@ -43,5 +43,18 @@ To satisfy the rule that dismissing an alert should not affect future borrowings
 ## 10. Normalizing Timeline Events
 We redefined the `LoanHistory` schema to represent a single timeline change event (state transition) rather than a complete loan summary. This lets us capture and preserve comments and transition authors for any transition (Requested, Issued, Returned, Lost) in an append-only collection.
 
+# Architecture & Tech Decisions - Day 4
+
+These are the key design choices made during the implementation of server-side search, filtering, sorting, pagination, and role security.
+
+## 11. Multi-Entity Server-Side Search Strategy
+Instead of pulling all records to client memory or relying on client-side JS filtering, the backend translates the `search` parameter into case-insensitive regex lookups on `Item` (name) and `User` (username) collections, combining their matching ObjectIDs into an `$or: [{ item: { $in: itemIds } }, { borrower: { $in: userIds } }]` condition.
+
+## 12. Strict Role Scoping at Database Query Level
+To strictly enforce security boundaries without trusting frontend inputs, non-librarians (members) have their query criteria hard-scoped to `{ borrower: req.user.id }` via a root `$and` array. Any client-provided `borrower` parameter from a non-librarian is unconditionally ignored, preventing cross-tenant data leakage.
+
+## 13. Server-Side Skip/Limit Pagination & Total Match Counts
+All sorting (`dueDate`, `createdAt`, `borrowDate`, `status`) and pagination (`skip`, `limit`) execute directly in MongoDB. `Loan.countDocuments(finalQuery)` runs concurrently with `Loan.find()` using `Promise.all`, ensuring that only a single page of records is ever transferred over the network while providing total match counts and total pages to the frontend controls.
+
 
 

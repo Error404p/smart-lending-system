@@ -13,6 +13,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/items', require('./routes/items'));
 app.use('/api/loans', require('./routes/loans'));
+app.use('/api/dashboard', require('./routes/dashboard'));
 
 // Basic test route
 app.get('/api/health', (req, res) => {

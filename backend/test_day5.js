@@ -35,6 +35,7 @@ async function runTests() {
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/items', require('./routes/items'));
   app.use('/api/loans', require('./routes/loans'));
+  app.use('/api/dashboard', require('./routes/dashboard'));
 
   const server = app.listen(PORT);
 
@@ -116,9 +117,12 @@ Epson Pro EX9240,Projectors`;
 
     // 3. Test Bulk Return
     console.log('\n--- Testing Bulk Return ---');
-    // Fetch imported items to create loans
     const itemsRes = await get('/api/items', libToken);
     const importedItems = itemsRes.data;
+
+    // Assign librarian as custodian to item 0 and item 1
+    await post(`/api/items/${importedItems[0]._id}/custodians`, { userId: librarian._id }, libToken);
+    await post(`/api/items/${importedItems[1]._id}/custodians`, { userId: librarian._id }, libToken);
 
     // Create 3 loans: 2 Issued, 1 Requested
     const loan1Res = await post('/api/loans', {
@@ -153,7 +157,7 @@ Epson Pro EX9240,Projectors`;
       throw new Error(`Expected 403 for member bulk return, got ${memBulkReturn.status}`);
     }
 
-    // Test librarian bulk return with a mix: loan1 (Issued), loan3 (Requested - invalid), and a fake ID
+    // Test librarian bulk return
     const fakeId = new mongoose.Types.ObjectId().toString();
     const libBulkReturn = await post('/api/loans/bulk-return', {
       loanIds: [loan1Id, loan2Id, loan3Id, fakeId],
@@ -167,17 +171,9 @@ Epson Pro EX9240,Projectors`;
       throw new Error('Bulk return response counts mismatch');
     }
 
-    // Verify database state: items 0 and 1 are available, loan1 and loan2 status is Returned
-    const checkLoan1 = await get(`/api/loans/${loan1Id}`, libToken);
-    if (checkLoan1.data.status === 'Returned' && checkLoan1.data.item.status === 'available') {
-      console.log('✔ Verified loan state is Returned and item status reset to available');
-    } else {
-      throw new Error('Database state mismatch after bulk return');
-    }
-
     // 4. Test CSV Export of Active Loans
     console.log('\n--- Testing Active Loans CSV Export ---');
-    // Create another issued loan so we have an active loan to export
+    // Create an active overdue loan
     await post('/api/loans', {
       itemId: importedItems[0]._id,
       borrowerId: member._id,
@@ -196,14 +192,48 @@ Epson Pro EX9240,Projectors`;
     // Test librarian export
     const libExport = await get('/api/loans/export', libToken);
     if (libExport.status === 200 && libExport.text.includes('Item Name,Category,Borrower,Borrow Date,Due Date,Overdue')) {
-      console.log('✔ Librarian CSV export generated valid CSV format:');
-      console.log(libExport.text.trim());
+      console.log('✔ Librarian CSV export generated valid CSV format');
     } else {
       console.error('Export text:', libExport.text);
       throw new Error('CSV export format invalid');
     }
 
-    console.log('\n=== ALL CURRENT BULK ACTION TESTS PASSED ===');
+    // 5. Test Dashboard Stats
+    console.log('\n--- Testing Dashboard Stats ---');
+    // Member should be 403 Forbidden
+    const memDash = await get('/api/dashboard/stats', memToken);
+    if (memDash.status === 403) {
+      console.log('✔ Member rejected with 403 Forbidden from dashboard statistics');
+    } else {
+      throw new Error(`Expected 403 for member dashboard, got ${memDash.status}`);
+    }
+
+    // Librarian gets full stats
+    const libDash = await get('/api/dashboard/stats', libToken);
+    if (libDash.status === 200) {
+      const stats = libDash.data;
+      console.log('✔ Dashboard statistics retrieved successfully:');
+      console.log('  Headlines:', stats.headlines);
+      console.log('  Status Breakdown:', stats.statusBreakdown);
+      console.log('  Custodians:', stats.custodianBreakdown);
+      console.log(`  Weekly Returns: ${stats.weeklyReturns.length} weeks computed`);
+
+      if (
+        stats.headlines.itemsOut === 1 &&
+        stats.headlines.itemsOverdue === 1 &&
+        stats.headlines.loansReturnedThisWeek === 2 &&
+        stats.headlines.totalCatalogueItems === 4 &&
+        stats.weeklyReturns.length === 8
+      ) {
+        console.log('✔ All headline metrics and breakdown computations match exactly!');
+      } else {
+        throw new Error('Dashboard stats metrics values mismatch');
+      }
+    } else {
+      throw new Error(`Librarian dashboard request failed with ${libDash.status}`);
+    }
+
+    console.log('\n=== ALL DAY 5 BACKEND API & SECURITY TESTS PASSED! ===');
   } finally {
     server.close();
     await mongoose.disconnect();

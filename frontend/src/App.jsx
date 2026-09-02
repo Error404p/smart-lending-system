@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Chart from 'chart.js/auto';
 
 const API_BASE = 'http://127.0.0.1:5000/api';
 
@@ -9,7 +10,7 @@ export default function App() {
   
   // Navigation & View state
   const [view, setView] = useState(user ? 'dashboard' : 'login');
-  const [activeTab, setActiveTab] = useState('catalogue'); // 'catalogue', 'loans', 'alerts'
+  const [activeTab, setActiveTab] = useState(user?.role === 'librarian' ? 'dashboard-view' : 'catalogue'); // 'dashboard-view', 'catalogue', 'loans', 'alerts'
   
   // Data state
   const [items, setItems] = useState([]);
@@ -17,8 +18,10 @@ export default function App() {
   const [overdueAlerts, setOverdueAlerts] = useState([]);
   const [librarians, setLibrarians] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
+  const [dashboardStats, setDashboardStats] = useState(null);
+  const [loadingDashboard, setLoadingDashboard] = useState(false);
   
-  // Day 4: Server-Side Loan Query, Filter, Sort & Pagination states
+  // Server-Side Loan Query, Filter, Sort & Pagination states
   const [loanSearch, setLoanSearch] = useState('');
   const [loanStatus, setLoanStatus] = useState('all');
   const [loanItem, setLoanItem] = useState('all');
@@ -26,19 +29,29 @@ export default function App() {
   const [loanSortBy, setLoanSortBy] = useState('createdAt');
   const [loanSortOrder, setLoanSortOrder] = useState('desc');
   const [loanPage, setLoanPage] = useState(1);
-  const [loanLimit, setLoanLimit] = useState(5);
+  const [loanLimit, setLoanLimit] = useState(10);
   const [loanTotalCount, setLoanTotalCount] = useState(0);
   const [loanTotalPages, setLoanTotalPages] = useState(1);
   
   // UI filter for librarian catalogue
   const [onlyMyCustodian, setOnlyMyCustodian] = useState(false);
   
+  // Bulk Actions State
+  const [selectedLoanIds, setSelectedLoanIds] = useState([]);
+  const [bulkReturnNote, setBulkReturnNote] = useState('');
+  const [bulkReturnReport, setBulkReturnReport] = useState(null);
+  
+  // CSV Import State
+  const [csvInputText, setCsvInputText] = useState('');
+  const [csvImportReport, setCsvImportReport] = useState(null);
+  const [importingCsv, setImportingCsv] = useState(false);
+  
   // Form states
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   
   // Modals state
-  const [activeModal, setActiveModal] = useState(null); // 'request', 'custodians', 'actionNote', 'timeline'
+  const [activeModal, setActiveModal] = useState(null); // 'request', 'custodians', 'actionNote', 'timeline', 'bulkImport', 'bulkReturn', 'bulkReturnReport', 'csvImportReport'
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedLoan, setSelectedLoan] = useState(null);
   const [selectedTimeline, setSelectedTimeline] = useState([]);
@@ -53,6 +66,10 @@ export default function App() {
   
   // Feedback messages
   const [message, setMessage] = useState(null); // { text, type: 'success'|'error' }
+
+  // Chart canvas ref
+  const chartCanvasRef = useRef(null);
+  const chartInstanceRef = useRef(null);
 
   // Sync token and user in localStorage
   useEffect(() => {
@@ -79,16 +96,86 @@ export default function App() {
         fetchOverdueAlerts();
         fetchLibrarians();
         fetchAllUsers();
+        if (activeTab === 'dashboard-view') {
+          fetchDashboardStats();
+        }
       }
     }
-  }, [user, token, onlyMyCustodian]);
+  }, [user, token, onlyMyCustodian, activeTab]);
 
   // Fetch loans whenever server-side query params change
   useEffect(() => {
-    if (user && token) {
+    if (user && token && activeTab === 'loans') {
       fetchLoans();
     }
-  }, [user, token, loanSearch, loanStatus, loanItem, loanBorrower, loanSortBy, loanSortOrder, loanPage, loanLimit]);
+  }, [user, token, loanSearch, loanStatus, loanItem, loanBorrower, loanSortBy, loanSortOrder, loanPage, loanLimit, activeTab]);
+
+  // Render Chart.js when dashboard stats are available and on the dashboard tab
+  useEffect(() => {
+    if (activeTab === 'dashboard-view' && dashboardStats && chartCanvasRef.current) {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+      }
+
+      const labels = dashboardStats.weeklyReturns.map(w => w.label);
+      const dataValues = dashboardStats.weeklyReturns.map(w => w.count);
+
+      chartInstanceRef.current = new Chart(chartCanvasRef.current, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Items Returned',
+            data: dataValues,
+            backgroundColor: '#4f46e5',
+            borderColor: '#6366f1',
+            borderWidth: 1,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.parsed.y} item(s) returned`
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                stepSize: 1,
+                color: '#94a3b8',
+                precision: 0
+              },
+              grid: {
+                color: '#2a354f'
+              }
+            },
+            x: {
+              ticks: {
+                color: '#94a3b8'
+              },
+              grid: {
+                display: false
+              }
+            }
+          }
+        }
+      });
+    }
+
+    return () => {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, [activeTab, dashboardStats]);
 
   const fetchAllUsers = async () => {
     try {
@@ -104,7 +191,28 @@ export default function App() {
     }
   };
 
-  // Alert count badge updates periodically or on changes
+  const fetchDashboardStats = async () => {
+    if (user?.role !== 'librarian') return;
+    try {
+      setLoadingDashboard(true);
+      const res = await fetch(`${API_BASE}/dashboard/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403) {
+          throw new Error('Access denied: Dashboard is librarian-only');
+        }
+        throw new Error('Failed to load dashboard metrics');
+      }
+      const data = await res.json();
+      setDashboardStats(data);
+    } catch (err) {
+      showFeedback(err.message, 'error');
+    } finally {
+      setLoadingDashboard(false);
+    }
+  };
+
   const fetchOverdueAlerts = async () => {
     try {
       const res = await fetch(`${API_BASE}/loans/overdue`, {
@@ -139,6 +247,7 @@ export default function App() {
       setToken(data.token);
       setUser(data.user);
       setView('dashboard');
+      setActiveTab(data.user.role === 'librarian' ? 'dashboard-view' : 'catalogue');
       setUsername('');
       setPassword('');
       showFeedback(`Welcome back, ${data.user.username}!`);
@@ -162,6 +271,7 @@ export default function App() {
       setToken(data.token);
       setUser(data.user);
       setView('dashboard');
+      setActiveTab('catalogue');
       setUsername('');
       setPassword('');
       showFeedback('Account created successfully! Public signups default to member.');
@@ -179,6 +289,8 @@ export default function App() {
     setOverdueAlerts([]);
     setLibrarians([]);
     setAllUsers([]);
+    setDashboardStats(null);
+    setSelectedLoanIds([]);
     handleClearLoanFilters();
   };
 
@@ -190,6 +302,7 @@ export default function App() {
     setLoanSortBy('createdAt');
     setLoanSortOrder('desc');
     setLoanPage(1);
+    setSelectedLoanIds([]);
   };
 
   // Catalogue Actions
@@ -229,6 +342,54 @@ export default function App() {
     }
   };
 
+  // CSV Bulk Import Action
+  const handleCsvBulkImportSubmit = async (e) => {
+    e.preventDefault();
+    if (!csvInputText.trim()) {
+      showFeedback('Please enter or paste CSV content', 'error');
+      return;
+    }
+
+    try {
+      setImportingCsv(true);
+      const res = await fetch(`${API_BASE}/items/bulk-import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ csvData: csvInputText })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Bulk import failed');
+      
+      setCsvImportReport(data);
+      setActiveModal('csvImportReport');
+      setCsvInputText('');
+      fetchItems();
+      showFeedback(`Import complete: ${data.importedCount} added, ${data.failedCount} failed.`);
+    } catch (err) {
+      showFeedback(err.message, 'error');
+    } finally {
+      setImportingCsv(false);
+    }
+  };
+
+  const handleCsvFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setCsvInputText(event.target.result);
+    };
+    reader.readAsText(file);
+  };
+
+  const loadSampleCsvTemplate = () => {
+    const sample = `Name,Category\nCanon EOS R5,Cameras\nSony FX3 Cinema Camera,Cameras\nZoom H6 Audio Recorder,Audio\nSennheiser MKE 600 Shotgun Mic,Audio\nEpson Pro EX9240 Wireless Projector,Projectors\nDeWalt 20V Max Cordless Drill,Tools`;
+    setCsvInputText(sample);
+  };
+
   // Loan Actions
   const fetchLoans = async () => {
     try {
@@ -250,6 +411,81 @@ export default function App() {
       setLoans(data.loans || []);
       setLoanTotalCount(data.totalCount || 0);
       setLoanTotalPages(data.totalPages || 1);
+    } catch (err) {
+      showFeedback(err.message, 'error');
+    }
+  };
+
+  // Bulk Return Actions
+  const handleToggleSelectLoan = (id) => {
+    setSelectedLoanIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAllIssued = () => {
+    const issuedLoans = loans.filter(l => l.status === 'Issued').map(l => l._id);
+    const allSelected = issuedLoans.length > 0 && issuedLoans.every(id => selectedLoanIds.includes(id));
+    if (allSelected) {
+      setSelectedLoanIds(prev => prev.filter(id => !issuedLoans.includes(id)));
+    } else {
+      setSelectedLoanIds(prev => Array.from(new Set([...prev, ...issuedLoans])));
+    }
+  };
+
+  const handleBulkReturnSubmit = async (e) => {
+    e.preventDefault();
+    if (selectedLoanIds.length === 0) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/loans/bulk-return`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          loanIds: selectedLoanIds,
+          note: bulkReturnNote
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Bulk return failed');
+
+      setBulkReturnReport(data);
+      setActiveModal('bulkReturnReport');
+      setSelectedLoanIds([]);
+      setBulkReturnNote('');
+      fetchLoans();
+      fetchItems();
+      fetchOverdueAlerts();
+      showFeedback(`Bulk return finished: ${data.successCount} returned, ${data.rejectedCount} rejected.`);
+    } catch (err) {
+      showFeedback(err.message, 'error');
+    }
+  };
+
+  // CSV Export Active Loans
+  const handleExportActiveLoans = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/loans/export`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        if (res.status === 403) throw new Error('Access denied: Librarian only');
+        throw new Error('Export failed');
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `active-loans-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      showFeedback('Active loans exported successfully as CSV.');
     } catch (err) {
       showFeedback(err.message, 'error');
     }
@@ -367,7 +603,6 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Custodian assignment failed');
       setAssignCustodianId('');
-      // Update local modal selected item custodians
       const updatedItem = { ...selectedItem };
       if (!updatedItem.custodians) updatedItem.custodians = [];
       const librarianObj = librarians.find(l => l._id === assignCustodianId);
@@ -390,7 +625,6 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Custodian removal failed');
-      // Update local modal selected item custodians
       const updatedItem = { ...selectedItem };
       updatedItem.custodians = updatedItem.custodians.filter(c => c._id !== userId);
       setSelectedItem(updatedItem);
@@ -421,6 +655,10 @@ export default function App() {
     return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
+  const issuedLoansOnCurrentPage = loans.filter(l => l.status === 'Issued');
+  const allCurrentPageIssuedSelected = issuedLoansOnCurrentPage.length > 0 && 
+    issuedLoansOnCurrentPage.every(l => selectedLoanIds.includes(l._id));
+
   return (
     <div className="app-container">
       {/* Navbar */}
@@ -430,6 +668,15 @@ export default function App() {
         </div>
         {user && (
           <div className="nav-links">
+            {user.role === 'librarian' && (
+              <button 
+                className={`nav-item ${activeTab === 'dashboard-view' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('dashboard-view'); fetchDashboardStats(); }}
+              >
+                Dashboard
+              </button>
+            )}
+
             <button 
               className={`nav-item ${activeTab === 'catalogue' ? 'active' : ''}`}
               onClick={() => { setActiveTab('catalogue'); fetchItems(); }}
@@ -575,10 +822,183 @@ export default function App() {
               </div>
             )}
 
+            {/* TAB: DASHBOARD (Goal 8 - Librarian only) */}
+            {activeTab === 'dashboard-view' && user.role === 'librarian' && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                  <div>
+                    <h2>Library Operations Dashboard</h2>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                      Operational overview, active asset circulation, custodian distribution, and 8-week return trends.
+                    </p>
+                  </div>
+                  <button className="btn btn-secondary btn-sm" onClick={fetchDashboardStats}>
+                    ↻ Refresh Stats
+                  </button>
+                </div>
+
+                {loadingDashboard && !dashboardStats ? (
+                  <p style={{ color: 'var(--text-secondary)' }}>Loading dashboard metrics...</p>
+                ) : dashboardStats ? (
+                  <div>
+                    {/* Headline Numbers Grid */}
+                    <div className="stats-grid">
+                      <div className="stat-card">
+                        <div className="stat-title">Items Currently Out</div>
+                        <div className="stat-value" style={{ color: '#f59e0b' }}>
+                          {dashboardStats.headlines.itemsOut}
+                        </div>
+                        <div className="stat-desc">Active borrower checkouts</div>
+                      </div>
+
+                      <div className="stat-card" style={dashboardStats.headlines.itemsOverdue > 0 ? { borderColor: '#ef4444' } : {}}>
+                        <div className="stat-title">Items Overdue</div>
+                        <div className="stat-value" style={{ color: '#ef4444' }}>
+                          {dashboardStats.headlines.itemsOverdue}
+                        </div>
+                        <div className="stat-desc">Due date passed and not yet returned</div>
+                      </div>
+
+                      <div className="stat-card">
+                        <div className="stat-title">Returned This Week</div>
+                        <div className="stat-value" style={{ color: '#10b981' }}>
+                          {dashboardStats.headlines.loansReturnedThisWeek}
+                        </div>
+                        <div className="stat-desc">Loans returned in last 7 days</div>
+                      </div>
+
+                      <div className="stat-card">
+                        <div className="stat-title">Total Catalogue Items</div>
+                        <div className="stat-value" style={{ color: '#6366f1' }}>
+                          {dashboardStats.headlines.totalCatalogueItems}
+                        </div>
+                        <div className="stat-desc">Total assets tracked in library</div>
+                      </div>
+                    </div>
+
+                    {/* Chart & Breakdowns Layout */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                      {/* Weekly Returns Chart */}
+                      <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div className="card-header" style={{ marginBottom: '1rem' }}>
+                          <h3 className="card-title">Items Returned per Week (Last 8 Weeks)</h3>
+                          <span className="card-subtitle">Aggregated return volume</span>
+                        </div>
+                        <div style={{ height: '260px', width: '100%', position: 'relative' }}>
+                          <canvas ref={chartCanvasRef}></canvas>
+                        </div>
+                      </div>
+
+                      {/* Status Breakdown Card */}
+                      <div className="card">
+                        <div className="card-header" style={{ marginBottom: '1rem' }}>
+                          <h3 className="card-title">Loans by Lifecycle Status</h3>
+                          <span className="card-subtitle">Distribution across all historical records</span>
+                        </div>
+                        <div className="status-breakdown-grid">
+                          <div className="status-pill-card">
+                            <span className="badge badge-requested">Requested</span>
+                            <span className="status-count">{dashboardStats.statusBreakdown.Requested}</span>
+                          </div>
+                          <div className="status-pill-card">
+                            <span className="badge badge-issued">Issued</span>
+                            <span className="status-count">{dashboardStats.statusBreakdown.Issued}</span>
+                          </div>
+                          <div className="status-pill-card">
+                            <span className="badge badge-returned">Returned</span>
+                            <span className="status-count">{dashboardStats.statusBreakdown.Returned}</span>
+                          </div>
+                          <div className="status-pill-card">
+                            <span className="badge badge-lost">Lost</span>
+                            <span className="status-count">{dashboardStats.statusBreakdown.Lost}</span>
+                          </div>
+                        </div>
+
+                        {/* Quick Action links */}
+                        <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                          <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('catalogue')}>
+                            Manage Catalogue
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('loans')}>
+                            View Loans List
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={handleExportActiveLoans}>
+                            Export Active Loans CSV
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Breakdown by Custodian */}
+                    <div className="card">
+                      <div className="card-header" style={{ marginBottom: '1rem' }}>
+                        <h3 className="card-title">Librarian Custodian Breakdown</h3>
+                        <span className="card-subtitle">Catalogue assets and active loans monitored per librarian</span>
+                      </div>
+                      
+                      {dashboardStats.custodianBreakdown.length === 0 ? (
+                        <p style={{ color: 'var(--text-secondary)' }}>No librarians registered.</p>
+                      ) : (
+                        <div className="table-responsive">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Librarian</th>
+                                <th>Assets Custodianed</th>
+                                <th>Active Checkouts On Custodianed Assets</th>
+                                <th>Total Historical Loans</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {dashboardStats.custodianBreakdown.map(c => (
+                                <tr key={c.librarianId}>
+                                  <td>
+                                    <strong>{c.username}</strong>
+                                    {c.username === user.username && (
+                                      <span className="user-role-badge" style={{ marginLeft: '0.5rem' }}>You</span>
+                                    )}
+                                  </td>
+                                  <td>{c.itemCount} items</td>
+                                  <td>
+                                    <span className="badge badge-borrowed">{c.activeLoansCount} active</span>
+                                  </td>
+                                  <td>{c.totalLoansCount} loans</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p style={{ color: 'var(--text-secondary)' }}>Failed to load dashboard.</p>
+                )}
+              </div>
+            )}
+
             {/* TAB: CATALOGUE */}
             {activeTab === 'catalogue' && (
               <div>
-                <h2 style={{ marginBottom: '1.5rem' }}>Catalogue items</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h2>Equipment Catalogue</h2>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                      Browse available equipment, check custodian coverage, and request items.
+                    </p>
+                  </div>
+
+                  {user.role === 'librarian' && (
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                      <button 
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setActiveModal('bulkImport')}
+                      >
+                        📥 Bulk Import (CSV)
+                      </button>
+                    </div>
+                  )}
+                </div>
                 
                 {user.role === 'librarian' && (
                   <div className="filter-tabs">
@@ -586,7 +1006,7 @@ export default function App() {
                       className={`filter-tab ${!onlyMyCustodian ? 'active' : ''}`}
                       onClick={() => setOnlyMyCustodian(false)}
                     >
-                      Full Catalogue
+                      Full Catalogue ({items.length})
                     </button>
                     <button 
                       className={`filter-tab ${onlyMyCustodian ? 'active' : ''}`}
@@ -601,7 +1021,9 @@ export default function App() {
                   {/* Catalogue Grid */}
                   <div style={{ gridColumn: 'span 2', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     {items.length === 0 ? (
-                      <p style={{ color: 'var(--text-secondary)' }}>No items found in catalogue.</p>
+                      <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+                        <p style={{ color: 'var(--text-secondary)' }}>No items found in catalogue.</p>
+                      </div>
                     ) : (
                       items.map(item => (
                         <div className="card" key={item._id}>
@@ -657,7 +1079,7 @@ export default function App() {
                   {/* Add Catalogue Item Sidebar (Librarian only) */}
                   {user.role === 'librarian' && (
                     <div className="card">
-                      <h3 className="card-title">Add New Asset</h3>
+                      <h3 className="card-title">Add Single Asset</h3>
                       <form onSubmit={handleCreateItem} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <div className="form-group" style={{ marginBottom: 0 }}>
                           <label className="form-label">Asset Name</label>
@@ -685,6 +1107,19 @@ export default function App() {
                           Add to Catalogue
                         </button>
                       </form>
+
+                      <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
+                          Need to import multiple items?
+                        </span>
+                        <button 
+                          className="btn btn-secondary btn-sm" 
+                          style={{ width: '100%' }}
+                          onClick={() => setActiveModal('bulkImport')}
+                        >
+                          Open CSV Bulk Importer
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -694,9 +1129,33 @@ export default function App() {
             {/* TAB: LOANS */}
             {activeTab === 'loans' && (
               <div>
-                <h2 style={{ marginBottom: '1.5rem' }}>
-                  {user.role === 'librarian' ? 'System Checkout History & Requests' : 'My Requests & Loans'}
-                </h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h2>{user.role === 'librarian' ? 'System Checkout History & Requests' : 'My Requests & Loans'}</h2>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                      Server-side searched, filtered, and paginated loan records.
+                    </p>
+                  </div>
+
+                  {user.role === 'librarian' && (
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      {selectedLoanIds.length > 0 && (
+                        <button 
+                          className="btn btn-primary btn-sm"
+                          onClick={() => setActiveModal('bulkReturn')}
+                        >
+                          ↩ Bulk Return ({selectedLoanIds.length})
+                        </button>
+                      )}
+                      <button 
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleExportActiveLoans}
+                      >
+                        📤 Export Active Loans (CSV)
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Server-Side Query Controls */}
                 <div className="query-container">
@@ -798,7 +1257,7 @@ export default function App() {
 
                   {/* Actions & Sort Direction Row */}
                   <div className="query-actions-row">
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                       <button 
                         type="button"
                         className="sort-direction-btn"
@@ -813,6 +1272,17 @@ export default function App() {
                       >
                         Reset All Filters
                       </button>
+
+                      {user.role === 'librarian' && issuedLoansOnCurrentPage.length > 0 && (
+                        <button 
+                          type="button" 
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleSelectAllIssued}
+                          style={{ marginLeft: '0.5rem' }}
+                        >
+                          {allCurrentPageIssuedSelected ? 'Deselect Page Issued' : 'Select All Page Issued'}
+                        </button>
+                      )}
                     </div>
 
                     <div className="pagination-info">
@@ -826,6 +1296,11 @@ export default function App() {
                   <span>
                     Showing {loans.length} of {loanTotalCount} matching records (Page {loanPage} of {loanTotalPages})
                   </span>
+                  {selectedLoanIds.length > 0 && (
+                    <span style={{ color: 'var(--accent-secondary)', fontWeight: 'bold' }}>
+                      ({selectedLoanIds.length} loan{selectedLoanIds.length > 1 ? 's' : ''} selected for bulk action)
+                    </span>
+                  )}
                 </div>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -842,13 +1317,24 @@ export default function App() {
                     </div>
                   ) : (
                     loans.map(loan => (
-                      <div className="card" key={loan._id}>
+                      <div className="card" key={loan._id} style={selectedLoanIds.includes(loan._id) ? { borderColor: 'var(--accent-primary)', backgroundColor: '#1e2640' } : {}}>
                         <div className="card-header">
-                          <div>
-                            <h3 className="card-title">{loan.item?.name || 'Unknown Item'}</h3>
-                            <span className="card-subtitle">
-                              Borrower: {loan.borrower?.username} | Category: {loan.item?.category}
-                            </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            {user.role === 'librarian' && loan.status === 'Issued' && (
+                              <input 
+                                type="checkbox"
+                                checked={selectedLoanIds.includes(loan._id)}
+                                onChange={() => handleToggleSelectLoan(loan._id)}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                title="Select for bulk return"
+                              />
+                            )}
+                            <div>
+                              <h3 className="card-title">{loan.item?.name || 'Unknown Item'}</h3>
+                              <span className="card-subtitle">
+                                Borrower: {loan.borrower?.username} | Category: {loan.item?.category}
+                              </span>
+                            </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             {loan.isOverdue && (
@@ -1021,10 +1507,258 @@ export default function App() {
 
       {/* FOOTER */}
       <footer style={{ borderTop: '1px solid var(--border-color)', height: '60px', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: 'var(--bg-secondary)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-        Smart Lending System © 2026. Made with Vanilla CSS.
+        Smart Lending System © 2026. Plain CSS implementation.
       </footer>
 
       {/* ================= MODALS ================= */}
+
+      {/* MODAL: CSV BULK IMPORT (Goal 7) */}
+      {activeModal === 'bulkImport' && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '650px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Bulk Import Catalogue Items (CSV)</h3>
+              <button className="nav-item" onClick={() => setActiveModal(null)} style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>×</button>
+            </div>
+            
+            <form onSubmit={handleCsvBulkImportSubmit}>
+              <div className="modal-body">
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                  Upload a <code>.csv</code> file or paste CSV text below. First line must be a header row containing <code>Name</code> and <code>Category</code> columns.
+                </p>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <input 
+                    type="file" 
+                    accept=".csv,text/csv,text/plain"
+                    onChange={handleCsvFileUpload}
+                    style={{ fontSize: '0.85rem' }}
+                  />
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary btn-sm"
+                    onClick={loadSampleCsvTemplate}
+                  >
+                    Load Sample CSV
+                  </button>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">CSV Data</label>
+                  <textarea 
+                    className="form-control"
+                    rows="8"
+                    placeholder="Name,Category&#10;Sony FX3 Camera,Cameras&#10;Shure SM7B Mic,Audio"
+                    value={csvInputText}
+                    onChange={(e) => setCsvInputText(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setActiveModal(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary btn-sm" disabled={importingCsv}>
+                  {importingCsv ? 'Importing...' : 'Import Catalogue Items'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CSV IMPORT REPORT (Per-row report) */}
+      {activeModal === 'csvImportReport' && csvImportReport && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '750px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title">CSV Bulk Import Report</h3>
+              <button className="nav-item" onClick={() => { setActiveModal(null); setCsvImportReport(null); }} style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>×</button>
+            </div>
+            
+            <div className="modal-body" style={{ maxHeight: '450px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem' }}>
+                  <div className="stat-title">Total Rows</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem' }}>{csvImportReport.totalRows}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem', borderColor: '#10b981' }}>
+                  <div className="stat-title">Successfully Imported</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem', color: '#10b981' }}>{csvImportReport.importedCount}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem', borderColor: csvImportReport.failedCount > 0 ? '#ef4444' : 'var(--border-color)' }}>
+                  <div className="stat-title">Failed Rows</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem', color: csvImportReport.failedCount > 0 ? '#ef4444' : '#94a3b8' }}>{csvImportReport.failedCount}</div>
+                </div>
+              </div>
+
+              {csvImportReport.failed.length > 0 && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <h4 style={{ color: '#ef4444', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                    Failed Rows Breakdown ({csvImportReport.failed.length})
+                  </h4>
+                  <div className="table-responsive">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Row #</th>
+                          <th>Raw Content</th>
+                          <th>Failure Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {csvImportReport.failed.map((f, i) => (
+                          <tr key={i}>
+                            <td><strong>Row {f.row}</strong></td>
+                            <td><code>{f.raw}</code></td>
+                            <td style={{ color: '#ef4444' }}>{f.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {csvImportReport.imported.length > 0 && (
+                <div>
+                  <h4 style={{ color: '#10b981', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                    Imported Items ({csvImportReport.imported.length})
+                  </h4>
+                  <div className="table-responsive">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Row #</th>
+                          <th>Asset Name</th>
+                          <th>Category</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {csvImportReport.imported.map((item, i) => (
+                          <tr key={i}>
+                            <td>Row {item.row}</td>
+                            <td><strong>{item.item.name}</strong></td>
+                            <td>{item.item.category}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => { setActiveModal(null); setCsvImportReport(null); }}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BULK RETURN CONFIRMATION (Goal 7) */}
+      {activeModal === 'bulkReturn' && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '550px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Bulk Return Loans</h3>
+              <button className="nav-item" onClick={() => setActiveModal(null)} style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>×</button>
+            </div>
+            
+            <form onSubmit={handleBulkReturnSubmit}>
+              <div className="modal-body">
+                <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>
+                  You have selected <strong>{selectedLoanIds.length}</strong> issued loan(s) to process as returned.
+                </p>
+
+                <div className="form-group">
+                  <label className="form-label">Bulk Return Note (optional)</label>
+                  <textarea 
+                    className="form-control"
+                    rows="3"
+                    placeholder="e.g. End of term equipment check-in batch..."
+                    value={bulkReturnNote}
+                    onChange={(e) => setBulkReturnNote(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setActiveModal(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary btn-sm">
+                  Process Return ({selectedLoanIds.length})
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BULK RETURN REPORT (Goal 7 - Per loan result report) */}
+      {activeModal === 'bulkReturnReport' && bulkReturnReport && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '650px' }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Bulk Return Processing Report</h3>
+              <button className="nav-item" onClick={() => { setActiveModal(null); setBulkReturnReport(null); }} style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>×</button>
+            </div>
+            
+            <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem' }}>
+                  <div className="stat-title">Total Processed</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem' }}>{bulkReturnReport.total}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem', borderColor: '#10b981' }}>
+                  <div className="stat-title">Successful Returns</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem', color: '#10b981' }}>{bulkReturnReport.successCount}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1, padding: '0.75rem', borderColor: bulkReturnReport.rejectedCount > 0 ? '#ef4444' : 'var(--border-color)' }}>
+                  <div className="stat-title">Rejected / Skipped</div>
+                  <div className="stat-value" style={{ fontSize: '1.4rem', color: bulkReturnReport.rejectedCount > 0 ? '#ef4444' : '#94a3b8' }}>{bulkReturnReport.rejectedCount}</div>
+                </div>
+              </div>
+
+              <div className="table-responsive">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Loan ID</th>
+                      <th>Status</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkReturnReport.results.map((r, i) => (
+                      <tr key={i}>
+                        <td><code>{r.loanId}</code></td>
+                        <td>
+                          <span className={`badge badge-${r.status === 'success' ? 'returned' : 'lost'}`}>
+                            {r.status}
+                          </span>
+                        </td>
+                        <td>{r.message || r.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => { setActiveModal(null); setBulkReturnReport(null); }}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: REQUEST BORROW */}
       {activeModal === 'request' && selectedItem && (
@@ -1175,7 +1909,7 @@ export default function App() {
             
             <div className="modal-body" style={{ maxHeight: '400px', overflowY: 'auto' }}>
               <div className="timeline">
-                {selectedTimeline.map((history, idx) => (
+                {selectedTimeline.map((history) => (
                   <div className="timeline-item active" key={history._id}>
                     <div className="timeline-marker"></div>
                     <div className="timeline-content">

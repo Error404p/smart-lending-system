@@ -56,5 +56,18 @@ To strictly enforce security boundaries without trusting frontend inputs, non-li
 ## 13. Server-Side Skip/Limit Pagination & Total Match Counts
 All sorting (`dueDate`, `createdAt`, `borrowDate`, `status`) and pagination (`skip`, `limit`) execute directly in MongoDB. `Loan.countDocuments(finalQuery)` runs concurrently with `Loan.find()` using `Promise.all`, ensuring that only a single page of records is ever transferred over the network while providing total match counts and total pages to the frontend controls.
 
+# Architecture & Tech Decisions - Day 5
 
+These are the key design choices made during the implementation of Bulk Actions and the Operations Dashboard.
 
+## 14. Lightweight In-Memory CSV Line Parser vs External Heavy CSV Package
+For `POST /api/items/bulk-import`, we implemented a native JavaScript RFC-compliant CSV parser capable of handling quoted cells, embedded commas, and whitespace trimming. This eliminates external package bloat (such as `papaparse` or `csv-parser`) and provides granular, line-by-line failure reporting with exact row numbers and human-readable reasons.
+
+## 15. Individual Row/Loan Isolation in Bulk Actions
+Both the CSV bulk importer and the bulk-return endpoints avoid atomic all-or-nothing rollbacks. Every valid entity is processed and committed to the database independently, while invalid rows (e.g. missing title/category) or loans in illegal states (e.g. already returned or requested) are individually captured and reported back in a structured report format (`{ total, successCount, rejectedCount, results: [...] }`).
+
+## 16. Bare Chart.js Integration with React Canvas Ref
+For the 8-week return trends chart, we integrated `chart.js` directly via a standard HTML5 `<canvas>` element using a React `useRef` and `useEffect` lifecycle rather than introducing React-specific wrappers like `react-chartjs-2` or heavy charting kits. This ensures zero React 19 compatibility hurdles and clean teardown on tab transitions.
+
+## 17. Rolling 8-Week Time Window Calculation
+The backend generates 8 distinct 7-day intervals counting backwards from the current timestamp, querying `Loan.countDocuments({ status: 'Returned', returnedDate: { $gte: weekStart, $lt: weekEnd } })` for each window. This guarantees a uniform 8-point dataset for the dashboard chart even with sparse or newly initialized databases.

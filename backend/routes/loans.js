@@ -7,6 +7,129 @@ const User = require('../models/User');
 const LoanHistory = require('../models/LoanHistory');
 const { protect, authorize } = require('../middleware/auth');
 
+// @route   POST /api/loans/bulk-return
+// @desc    Bulk return multiple issued loans in one action
+// @access  Private (Librarian only)
+router.post('/bulk-return', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const { loanIds, note } = req.body;
+    if (!loanIds || !Array.isArray(loanIds) || loanIds.length === 0) {
+      return res.status(400).json({ message: 'loanIds array is required' });
+    }
+
+    const results = [];
+    let successCount = 0;
+    let rejectedCount = 0;
+
+    for (const id of loanIds) {
+      if (!mongoose.isValidObjectId(id)) {
+        results.push({
+          loanId: id,
+          status: 'rejected',
+          reason: 'Invalid loan ID format'
+        });
+        rejectedCount++;
+        continue;
+      }
+
+      const loan = await Loan.findById(id);
+      if (!loan) {
+        results.push({
+          loanId: id,
+          status: 'rejected',
+          reason: 'Loan not found'
+        });
+        rejectedCount++;
+        continue;
+      }
+
+      if (loan.status !== 'Issued') {
+        results.push({
+          loanId: id,
+          status: 'rejected',
+          reason: `Cannot return loan in '${loan.status}' status (must be in 'Issued' status)`
+        });
+        rejectedCount++;
+        continue;
+      }
+
+      // Process return
+      loan.status = 'Returned';
+      loan.returnedDate = new Date();
+      await loan.save();
+
+      // Reset item in catalogue
+      await Item.findByIdAndUpdate(loan.item, {
+        status: 'available',
+        borrowedBy: null
+      });
+
+      // Write timeline audit record
+      const returnHistory = new LoanHistory({
+        loan: loan._id,
+        item: loan.item,
+        borrower: loan.borrower,
+        state: 'Returned',
+        changedBy: req.user.id,
+        note: note ? `Bulk return: ${note}` : 'Bulk return action'
+      });
+      await returnHistory.save();
+
+      results.push({
+        loanId: id,
+        status: 'success',
+        message: 'Loan successfully returned'
+      });
+      successCount++;
+    }
+
+    res.json({
+      total: loanIds.length,
+      successCount,
+      rejectedCount,
+      results
+    });
+  } catch (err) {
+    console.error('Bulk return error:', err);
+    res.status(500).json({ message: 'Server error processing bulk return' });
+  }
+});
+
+// @route   GET /api/loans/export
+// @desc    Export every item currently on loan as a CSV
+// @access  Private (Librarian only)
+router.get('/export', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const activeLoans = await Loan.find({ status: 'Issued' })
+      .populate('item')
+      .populate('borrower', 'username role')
+      .sort({ dueDate: 1 });
+
+    const headers = ['Item Name', 'Category', 'Borrower', 'Borrow Date', 'Due Date', 'Overdue'];
+    const rows = [headers.join(',')];
+
+    for (const loan of activeLoans) {
+      const itemName = loan.item ? `"${(loan.item.name || '').replace(/"/g, '""')}"` : 'Unknown Item';
+      const category = loan.item ? `"${(loan.item.category || '').replace(/"/g, '""')}"` : '';
+      const borrower = loan.borrower ? `"${(loan.borrower.username || '').replace(/"/g, '""')}"` : 'Unknown';
+      const borrowDate = loan.borrowDate ? new Date(loan.borrowDate).toISOString().split('T')[0] : '';
+      const dueDate = loan.dueDate ? new Date(loan.dueDate).toISOString().split('T')[0] : '';
+      const isOverdue = loan.dueDate && new Date(loan.dueDate) < new Date() ? 'Yes' : 'No';
+
+      rows.push([itemName, category, borrower, borrowDate, dueDate, isOverdue].join(','));
+    }
+
+    const csvContent = rows.join('\r\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="active-loans-${Date.now()}.csv"`);
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error('Export loans error:', err);
+    res.status(500).json({ message: 'Server error generating loans CSV export' });
+  }
+});
+
 // @route   POST /api/loans
 // @desc    Create a new loan (member request or librarian direct-issue)
 // @access  Private (Authenticated users)

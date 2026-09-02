@@ -4,6 +4,131 @@ const Item = require('../models/Item');
 const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
 
+// Helper to parse CSV lines safely handling quotes and commas
+function parseCSVLine(text) {
+  const result = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"' || char === "'") {
+      if (inQuotes && text[i + 1] === char) {
+        cur += char;
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(cur.trim());
+      cur = '';
+    } else {
+      cur += char;
+    }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+// @route   POST /api/items/bulk-import
+// @desc    Bulk import catalogue items from CSV text
+// @access  Private (Librarian only)
+router.post('/bulk-import', protect, authorize('librarian'), async (req, res) => {
+  try {
+    const { csvData } = req.body;
+    if (!csvData || typeof csvData !== 'string' || !csvData.trim()) {
+      return res.status(400).json({ message: 'CSV data string is required in request body' });
+    }
+
+    const lines = csvData
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    if (lines.length < 2) {
+      return res.status(400).json({ message: 'CSV must contain at least a header line and one data row' });
+    }
+
+    // Parse header
+    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+    let nameIdx = headers.findIndex(h => ['name', 'title', 'item', 'item name', 'item_name'].includes(h));
+    let catIdx = headers.findIndex(h => ['category', 'cat', 'item_category', 'item category'].includes(h));
+
+    // Fallback if headers are not named standardly but exactly 2 columns are present
+    if (nameIdx === -1 && catIdx === -1 && headers.length >= 2) {
+      nameIdx = 0;
+      catIdx = 1;
+    } else {
+      if (nameIdx === -1) nameIdx = 0;
+      if (catIdx === -1) catIdx = 1;
+    }
+
+    const imported = [];
+    const failed = [];
+
+    // Process data rows
+    for (let i = 1; i < lines.length; i++) {
+      const rowNum = i + 1; // 1-indexed for human readability
+      const rawLine = lines[i];
+      const cols = parseCSVLine(rawLine);
+
+      const name = cols[nameIdx] || '';
+      const category = cols[catIdx] || '';
+
+      if (!name) {
+        failed.push({
+          row: rowNum,
+          raw: rawLine,
+          reason: 'Missing required field: item name / title'
+        });
+        continue;
+      }
+
+      if (!category) {
+        failed.push({
+          row: rowNum,
+          raw: rawLine,
+          reason: 'Missing required field: category'
+        });
+        continue;
+      }
+
+      try {
+        const newItem = new Item({
+          name: name.trim(),
+          category: category.trim(),
+          status: 'available'
+        });
+        await newItem.save();
+        imported.push({
+          row: rowNum,
+          item: {
+            id: newItem._id,
+            name: newItem.name,
+            category: newItem.category
+          }
+        });
+      } catch (saveErr) {
+        failed.push({
+          row: rowNum,
+          raw: rawLine,
+          reason: saveErr.message || 'Database error creating item'
+        });
+      }
+    }
+
+    res.status(200).json({
+      totalRows: lines.length - 1,
+      importedCount: imported.length,
+      failedCount: failed.length,
+      imported,
+      failed
+    });
+  } catch (err) {
+    console.error('Bulk import error:', err);
+    res.status(500).json({ message: 'Server error processing CSV bulk import' });
+  }
+});
+
 // @route   POST /api/items
 // @desc    Create a new catalog item
 // @access  Private (Librarian only)

@@ -41,7 +41,7 @@ const LoanSchema = new mongoose.Schema({
 });
 
 // Virtual for dynamic overdue status calculation
-LoanSchema.virtual('isOverdue').get(function() {
+LoanSchema.virtual('isOverdue').get(function () {
   return this.status === 'Issued' && this.dueDate < new Date();
 });
 

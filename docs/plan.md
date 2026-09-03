@@ -10,8 +10,8 @@ This document outlines the paced 6-day build schedule (2h per session), work bre
 | **Day 2** | Loan Lifecycle State Machine, Concurrency checkout guard, In-memory tests | 2.0h | ~2.0h | Completed | `9983e7a` - `6320991` |
 | **Day 3** | Custodians, Append-only Loan Timelines, Overdue Alert Computation & Scoped Dismissal, React UI | 2.0h | ~2.1h | Completed | `d59b5f5` - `9698308` |
 | **Day 4** | Server-side Search, Multi-criteria Filters, Sorting & Skip/Limit Pagination with Total Match Counts | 2.0h | ~1.9h | Completed | `eb5bf04` - `a4a7979` |
-| **Day 5** | Bulk CSV Import with per-row reports, Bulk Return with per-loan reports, Active Loans CSV Export, Dashboard with Headline stats & 8-week Chart.js return trends | 2.0h | ~2.0h | Completed | `1585199`, `e2583a6`, `de62da4`, `1f8aec3`, `89331de` |
-| **Day 6** | Multi-role demo seed data, Deployment configuration (Render + Vercel + MongoDB Atlas), `SUBMISSION.md`, Final review | 2.0h | - | Planned (Next Session) | - |
+| **Day 5** | Bulk CSV Import with per-row reports, Bulk Return with per-loan reports, Active Loans CSV Export, Dashboard with Headline stats & 8-week Chart.js return trends | 2.0h | ~2.0h | Completed | `1585199`, `e2583a6`, `de62da4`, `1f8aec3`, `89331de`, `1fba744` |
+| **Day 6** | Multi-role demo seed data, Deployment configuration (Render + Vercel + MongoDB Atlas), `SUBMISSION.md`, `architecture.md`, Security Audit, Final review | 2.0h | ~1.9h | Completed | `792f541`, `2b8fcb8`, `f60f5ad` |
 
 ---
 
@@ -21,3 +21,11 @@ This document outlines the paced 6-day build schedule (2h per session), work bre
 3. **CSV Export**: Created an export endpoint streaming all active `Issued` loans in standard CSV format with headers, borrower info, and overdue indicators.
 4. **Dashboard Backend & Aggregations**: Implemented `GET /api/dashboard/stats` aggregating headline numbers, lifecycle status counts, librarian custodian item/loan counts, and 8 distinct rolling 7-day return volume buckets.
 5. **Frontend Dashboard & Bulk Action UI**: Added Dashboard tab with 4 metric cards, status breakdown cards, custodian distribution table, and an 8-week return trends bar chart using Chart.js on a native `<canvas>`. Added CSV importer modal and bulk return selection controls.
+
+---
+
+## Day 6 Build Order & Design Rationale
+1. **Extended Multi-Role Seed Data**: Extended `backend/seed.js` with 3 librarians, 5 members, 17 items, 26 loans (including `Lost`, overdue loans, and historical returns spanning all 8 weekly buckets) and full `LoanHistory` audit entries. Enabled seed script to run against any `MONGO_URI`.
+2. **Deployment Preparation & Manifests**: Created `render.yaml` for Express backend on Render, `vercel.json` for React frontend on Vercel, and `.env.example` templates for both services. Configured dynamic `VITE_API_URL` handling in Vite client.
+3. **Automated Role-Enforcement Security Audit**: Executed `backend/test_audit.js` covering 19 distinct role and permission checks across all mutating endpoints, confirming zero client-escalation vulnerabilities and strict multi-tenant loan isolation.
+4. **Architecture & Submission Documentation**: Authored `docs/architecture.md` with complete folder tree, auth token mechanics, Mermaid sequence diagrams for request lifecycles, Mermaid state machine diagrams, and full endpoint authorization matrices. Authored `SUBMISSION.md` with demo credentials, cloud setup steps, and operational guidelines.

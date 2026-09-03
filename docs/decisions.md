@@ -1,73 +1,92 @@
-# Architecture & Tech Decisions - Day 1
+# Architecture & Tech Decisions Log
 
-These are the calls made today during setup. Kept it simple and functional.
+This document records the architectural calls, trade-offs, and design revisions made across all 6 development sessions of the Asset Lending System.
 
-## 1. Git Re-initialization
-The workspace started with pre-existing commits and files missing from the working tree. To ensure the incremental commit log looks clean, and scores high, I wiped the old `.git` and initialized a fresh repository.
+---
+
+# Day 1 Decisions
+
+## 1. Git Repository Re-initialization
+The starter workspace contained detached commits and files missing from the working tree. To ensure clean, human-paced, reproducible Git history, the existing `.git` directory was re-initialized fresh.
 
 ## 2. Using `bcryptjs` over native `bcrypt`
-Native C++ bcrypt can be a huge pain to build on Windows/environments without compiler toolchains. `bcryptjs` is pure JS, slightly slower but plenty fast enough for this size, and highly portable.
+Native C++ `bcrypt` frequently fails compilation across varied developer environments (Windows build tools, minimal CI/CD containers). `bcryptjs` provides pure-JavaScript hashing with zero binary dependencies, ensuring portability with negligible latency for authentication workloads.
 
-## 3. Database separation of active loans and history
-Instead of keeping all historical and active loans in a single massive `loans` table with a state flag:
-- Active loans live in `loans`.
-- Closed loans live in `loanhistories`.
-Active loan lookups will stay fast even as the system runs for months. The downside is dual writes/moves on loan return, but for Day 1 schemas this clean separation works best.
+## 3. Database Separation of Active Loans and History [REVERSED on Day 3]
+*Initial Decision*: Keep active loans in `loans` collection and move closed loans to `loanhistories`.
+*Status*: **REVERSED on Day 3 (See Decision #10)**.
 
-## 4. Auth flow and payload
-The `/register` and `/login` endpoints return the signed JWT token along with basic user details (id, username, role) so the frontend doesn't need to do a secondary fetch immediately after authentication. JWT is signed with 1d expiration.
+## 4. Auth Flow & JWT Payload
+The `/register` and `/login` endpoints return the signed JWT token along with sanitized user details (`id`, `username`, `role`) so the client does not need a secondary network roundtrip to initialize user session state.
 
-# Architecture & Tech Decisions - Day 2
+---
 
-These are the key design choices made during the implementation of the loan lifecycle and transaction guards.
+# Day 2 Decisions
 
-## 5. Concurrency Guard using Partial Unique Index
-To prevent race conditions where two checkouts or open request items slip through, we implemented a MongoDB Partial Unique Index on the `loans` collection on `{ item: 1 }`, filtered by `{ status: { $in: ['Requested', 'Issued'] } }`. This acts as an atomic database-level enforcement mechanism that rejects duplicate active loans (in 'Requested' or 'Issued' states) for the same item. It operates safely on standalone MongoDB instances, avoiding the replica-set requirement of MongoDB Sessions.
+## 5. Concurrency Guard via MongoDB Partial Unique Index
+To prevent race conditions where two simultaneous checkouts or requests for the same catalogue item slip through, we implemented a MongoDB Partial Unique Index on `Loan` `{ item: 1 }` filtered by `{ status: { $in: ['Requested', 'Issued'] } }`. This acts as an atomic database-level enforcement mechanism that rejects duplicate active loans without requiring MongoDB multi-document transactions or replica-set configurations.
 
-## 6. In-Memory Testing Setup
-To support self-contained, offline testing, we integrated `mongodb-memory-server` into our automated testing pipeline (`test_lifecycle.js`). This automatically spins up a clean, ephemeral MongoDB instance, executes our test suites, and tears down the database, ensuring zero side-effects on development databases.
+## 6. In-Memory Automated Testing Harness
+To enable fast, hermetic, offline test runs without relying on a pre-installed host MongoDB service, we integrated `mongodb-memory-server` into `test_lifecycle.js`. It boots an ephemeral in-memory database, runs test assertions, and tears down cleanly.
 
-# Architecture & Tech Decisions - Day 3
+---
 
-These are the key architectural choices made during Day 3 implementation:
+# Day 3 Decisions
 
-## 7. Persistent In-Memory Database for Development
-Since no native MongoDB service was installed on the host system, we created `start-db.js` using `mongodb-memory-server` configured to bind to port 27017 and write data physically to `backend/db-data`. This allows a seamless developer checkout experience with fully working database state that behaves identically to a native local MongoDB server.
+## 7. Persistent In-Memory Database for Local Development (`start-db.js`)
+Since no background MongoDB daemon was running on the development workstation, we configured `start-db.js` with `mongodb-memory-server` bound to port 27017 writing data physically to `backend/db-data`. This provides a zero-install developer experience with full persistence across restarts.
 
-## 8. Absolute Member-Only Signup Enforcement
-We modified `/register` to ignore incoming client-supplied roles and force `role: 'member'`. Librarians are strictly created through direct database seeding/commands. This blocks public escalation attempts.
+## 8. Hardcoded Role Isolation on Public Registration
+Audited `POST /api/auth/register` to unconditionally enforce `role: 'member'`, ignoring any `role` attribute passed in client request bodies. Librarian accounts can only be provisioned via direct database seeding or administrative scripts, eliminating client privilege escalation.
 
 ## 9. Scoping Overdue Alerts to Loan Instances
-To satisfy the rule that dismissing an alert should not affect future borrowings of the same item, we introduced `alertDismissed` to the `Loan` schema. This confines the dismissal to the specific loan instance, so if the item is returned and checked out again later on a new loan, a new overdue alert will trigger and surface correctly if it becomes past due.
+To ensure that dismissing an alert for an overdue loan does not suppress alerts if the item is borrowed again in the future, we attached `alertDismissed` to the specific `Loan` document rather than the `Item` or `User`. Future loans for the same asset generate distinct alerts when overdue.
 
-## 10. Normalizing Timeline Events
-We redefined the `LoanHistory` schema to represent a single timeline change event (state transition) rather than a complete loan summary. This lets us capture and preserve comments and transition authors for any transition (Requested, Issued, Returned, Lost) in an append-only collection.
+## 10. REVERSAL OF DECISION #3: Unified Loan Collection & Append-Only Timeline Events
+*Reversal Context*: Moving loans between `loans` and `loanhistories` caused schema duplication, complex pagination across two collections, and loss of intermediate transition audit metadata.
+*New Design*: All loan records (`Requested`, `Issued`, `Returned`, `Lost`) reside in the single `loans` collection. `LoanHistory` was repurposed as an append-only timeline event log (recording `{ loan, item, borrower, state, changedBy, note, timestamp }`). This enables historical audit trails while keeping active and past queries unified.
 
-# Architecture & Tech Decisions - Day 4
+---
 
-These are the key design choices made during the implementation of server-side search, filtering, sorting, pagination, and role security.
+# Day 4 Decisions
 
-## 11. Multi-Entity Server-Side Search Strategy
-Instead of pulling all records to client memory or relying on client-side JS filtering, the backend translates the `search` parameter into case-insensitive regex lookups on `Item` (name) and `User` (username) collections, combining their matching ObjectIDs into an `$or: [{ item: { $in: itemIds } }, { borrower: { $in: userIds } }]` condition.
+## 11. Server-Side Search via Relational ID Resolution
+Instead of fetching entire datasets into client memory, `GET /api/loans` resolves search queries against `Item` (name) and `User` (username) collections via regex, passing matching IDs to an `$or` query on the `loans` collection.
 
-## 12. Strict Role Scoping at Database Query Level
-To strictly enforce security boundaries without trusting frontend inputs, non-librarians (members) have their query criteria hard-scoped to `{ borrower: req.user.id }` via a root `$and` array. Any client-provided `borrower` parameter from a non-librarian is unconditionally ignored, preventing cross-tenant data leakage.
+## 12. Unconditional Database-Level Tenant Scoping
+Member loan queries are hard-scoped on the server via `finalQuery.borrower = req.user.id`. Any `borrower` filter supplied in the query string by a member is discarded before query execution, preventing cross-tenant information disclosure.
 
-## 13. Server-Side Skip/Limit Pagination & Total Match Counts
-All sorting (`dueDate`, `createdAt`, `borrowDate`, `status`) and pagination (`skip`, `limit`) execute directly in MongoDB. `Loan.countDocuments(finalQuery)` runs concurrently with `Loan.find()` using `Promise.all`, ensuring that only a single page of records is ever transferred over the network while providing total match counts and total pages to the frontend controls.
+## 13. Skip/Limit Pagination with Concurrent Count Queries
+Sorting and pagination (`skip`, `limit`) execute directly in the database. `Loan.countDocuments()` runs in parallel with `Loan.find()` using `Promise.all`, returning total matching records and total page count without full-table data transfer.
 
-# Architecture & Tech Decisions - Day 5
+---
 
-These are the key design choices made during the implementation of Bulk Actions and the Operations Dashboard.
+# Day 5 Decisions
 
-## 14. Lightweight In-Memory CSV Line Parser vs External Heavy CSV Package
-For `POST /api/items/bulk-import`, we implemented a native JavaScript RFC-compliant CSV parser capable of handling quoted cells, embedded commas, and whitespace trimming. This eliminates external package bloat (such as `papaparse` or `csv-parser`) and provides granular, line-by-line failure reporting with exact row numbers and human-readable reasons.
+## 14. In-Memory Streaming CSV Parser vs Heavy External Libraries
+For `POST /api/items/bulk-import`, we wrote a lightweight native RFC-compliant CSV parser handling quoted cells and commas. This avoided heavy dependencies like `papaparse` while generating granular line-by-line validation failure reports with exact row indices and rejection reasons.
 
-## 15. Individual Row/Loan Isolation in Bulk Actions
-Both the CSV bulk importer and the bulk-return endpoints avoid atomic all-or-nothing rollbacks. Every valid entity is processed and committed to the database independently, while invalid rows (e.g. missing title/category) or loans in illegal states (e.g. already returned or requested) are individually captured and reported back in a structured report format (`{ total, successCount, rejectedCount, results: [...] }`).
+## 15. Individual Loan Isolation in Bulk Actions
+Both CSV bulk import and bulk return avoid all-or-nothing transactions. Valid rows and loans are processed and committed immediately, while invalid items are captured in a structured failure report (`{ total, successCount, rejectedCount, results }`).
 
-## 16. Bare Chart.js Integration with React Canvas Ref
-For the 8-week return trends chart, we integrated `chart.js` directly via a standard HTML5 `<canvas>` element using a React `useRef` and `useEffect` lifecycle rather than introducing React-specific wrappers like `react-chartjs-2` or heavy charting kits. This ensures zero React 19 compatibility hurdles and clean teardown on tab transitions.
+## 16. Canvas-Ref Chart.js Integration without React Wrappers
+Integrated `chart.js` directly on a native HTML5 `<canvas>` ref via `useEffect` lifecycle rather than using wrappers (`react-chartjs-2`). This guarantees zero React 19 compatibility hurdles and clean teardown on tab unmounts.
 
-## 17. Rolling 8-Week Time Window Calculation
-The backend generates 8 distinct 7-day intervals counting backwards from the current timestamp, querying `Loan.countDocuments({ status: 'Returned', returnedDate: { $gte: weekStart, $lt: weekEnd } })` for each window. This guarantees a uniform 8-point dataset for the dashboard chart even with sparse or newly initialized databases.
+## 17. Rolling 8-Week Time Window Computation
+The backend computes 8 distinct 7-day intervals counting backwards from `Date.now()`, executing `Loan.countDocuments({ status: 'Returned', returnedDate: { $gte: weekStart, $lt: weekEnd } })` for each window. This ensures uniform 8-point metrics even on fresh databases.
+
+---
+
+# Day 6 Decisions
+
+## 18. Deterministic Multi-Period Demo Data Generation
+Rather than seeding arbitrary dummy records, `seed.js` generates realistic multi-role personas (3 librarians, 5 members), 17 catalogue items across 7 categories, and 26 loans with full `LoanHistory` event timelines. Returned loans are deliberately distributed across all 8 weekly return intervals so that the Operations Dashboard returns trend chart immediately showcases rich operational insights.
+
+## 19. Single-Source Environment-Aware API Client Configuration
+In `frontend/src/App.jsx`, `API_BASE` dynamically resolves `import.meta.env.VITE_API_URL` with automatic `/api` suffix normalization, falling back cleanly to `http://127.0.0.1:5000/api` in local development. This enables seamless deployment to Vercel without altering codebase source files.
+
+## 20. Declarative Cloud Infrastructure Blueprints (`render.yaml` & `vercel.json`)
+Created blueprint configuration files for Render (`render.yaml`) and Vercel (`vercel.json`). `render.yaml` specifies root directories, build/start commands, health check paths, and required environment variables, while `vercel.json` provides SPA rewrite rules (`/(.*)` -> `/`) to ensure client-side routing functions correctly under production CDN hosting.
+
+## 21. Automated Self-Contained Role-Enforcement Security Audit Suite (`test_audit.js`)
+Built a standalone test suite (`backend/test_audit.js`) using `MongoMemoryServer` that authenticates as both `librarian` and `member` users and tests all 19 mutating and privileged endpoints. It asserts HTTP 403 Forbidden for unauthorized access, HTTP 401 for unauthenticated requests, and blocks member role escalation and query tampering.

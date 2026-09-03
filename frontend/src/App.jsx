@@ -662,7 +662,7 @@ export default function App() {
     issuedLoansOnCurrentPage.every(l => selectedLoanIds.includes(l._id));
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${view === 'login' || view === 'register' ? 'auth-layout' : ''}`}>
       {/* Navbar */}
       <header className="navbar">
         <div className="nav-brand">

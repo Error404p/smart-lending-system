@@ -406,34 +406,88 @@ body {
   font-weight: 600;
 }
 
-/* Auth Layout */
+/* Auth Layout & Background */
+.auth-layout {
+  min-height: 100vh;
+  position: relative;
+  background-color: #0b0f19;
+  background-image: 
+    radial-gradient(ellipse at 50% 40%, rgba(15, 23, 42, 0.4) 0%, rgba(11, 15, 25, 0.82) 80%),
+    linear-gradient(135deg, rgba(79, 70, 229, 0.2) 0%, rgba(6, 182, 212, 0.12) 100%),
+    url('/login-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+.auth-layout .navbar {
+  background: rgba(20, 27, 45, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .auth-container {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: calc(100vh - 200px);
+  min-height: calc(100vh - 140px);
+  padding: 2rem 1rem;
 }
 
 .auth-card {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
+  background: rgba(20, 27, 45, 0.78);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
   padding: 2.5rem;
   width: 100%;
-  max-width: 420px;
-  box-shadow: var(--shadow-lg);
+  max-width: 440px;
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.7),
+    0 0 35px rgba(79, 70, 229, 0.2),
+    inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  animation: authCardFadeIn 0.4s ease-out;
+}
+
+@keyframes authCardFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-card .form-control {
+  background-color: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f8fafc;
+}
+
+.auth-card .form-control:focus {
+  background-color: rgba(15, 23, 42, 0.92);
+  border-color: var(--accent-secondary);
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.25);
 }
 
 .auth-title {
-  font-size: 1.6rem;
+  font-size: 1.75rem;
   font-weight: 700;
   margin-bottom: 0.4rem;
+  background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .auth-subtitle {
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  margin-bottom: 1.5rem;
+  font-size: 0.925rem;
+  margin-bottom: 1.75rem;
 }
 
 .form-footer {

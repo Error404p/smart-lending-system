@@ -1,3 +1,5 @@
+# Point to be noted i am an ml engineer and i have learned backend for this please don't consider it to be extra viable or that much fancy
+
 # Asset Lending System
 
 A small MERN app for tracking shared equipment loans — built to replace a paper sign-out sheet.
